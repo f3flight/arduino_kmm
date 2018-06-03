@@ -27,12 +27,21 @@ struct keyboard_payload {
   uint8_t codes[ACTION_KB_CODES_MAX];
 };
 
+struct midi_payload {
+  uint8_t cin;  // "Code Index Number", 4 bits - used specifically in USB MIDI implementation and in most cases duplicates type value.
+  uint8_t type: 4;
+  uint8_t channel: 4;
+  uint8_t data1;
+  uint8_t data2;
+};
+
 union payload {
   keyboard_payload keyboard;
+  midi_payload midi;
 };
 
 typedef bool(*parse_function)(char*, const char, payload*);
-typedef bool(*action_function)(payload);
+typedef bool(*action_function)(payload, bool);
 
 struct function_link {
   char action_name[ACTION_NAME_LEN_MAX];
@@ -41,21 +50,22 @@ struct function_link {
 };
 
 bool parser_keyboard(char* input, const char delim, payload* p);
-bool action_keyboard(payload input);
-bool action_mouse(payload input);
-bool action_midi(payload input);
+bool parser_midi(char* input, const char delim, payload* p);
+bool action_keyboard(payload input, bool state);
+bool action_mouse(payload input, bool state);
+bool action_midi(payload input, bool state);
 
 const function_link function_map[NUM_ACTIONS] = {
   {"kb", &action_keyboard, &parser_keyboard},
   {"mouse", &action_mouse},
-  {"midi", &action_midi},
+  {"midi", &action_midi, &parser_midi},
 };
 
 struct input_action {
   action_function action;
   payload p;
-  bool execute() {
-    return action(p);
+  bool execute(bool state) {
+    return action(p, state);
   }
 };
 
@@ -85,7 +95,7 @@ void loop() {
         input_state[pin] = state;
         for (int i = 0; i < PIN_ACTIONS_MAX; i++) {
           if (pin_actions[pin][i].action == nullptr) break;
-          pin_actions[pin][i].execute();
+          pin_actions[pin][i].execute(state);
         }
         // int action = (state) ? 0x90 : 0x80;
         // midiEventPacket_t noteOn = {0x09, action | 0, 48 + pin, 127};
@@ -123,10 +133,11 @@ void parse_input(char* input, const char delim) {  // input must be a proper 0-t
       _p("running: "); _pn(parse_buffer);
       if (parse_action(parse_buffer, INNER_DELIM, &(parsed_action.action), &(parsed_action.p))) {
         _pn("parsed action, executing");
-        parsed_action.execute();
+        parsed_action.execute(true);
+        parsed_action.execute(false);
       }
     } else if (get || (set && counter == 1) || test) {
-      if (!str_to_int(parse_buffer, &input_num) || input_num < 0 || input_num > NUM_INPUT_PINS - 1) {
+      if (!str_to_int(parse_buffer, &input_num, 10) || input_num < 0 || input_num > NUM_INPUT_PINS - 1) {
         _pn("Are you trying to break me? This input pin number is bad.");
         break;
       }
@@ -195,7 +206,7 @@ bool parser_keyboard(char* input, const char delim, payload* p) {
   while (strtok_better(parse_buffer, READ_BUFFER_LEN, &buffer_pos, input, delim)) {
     _p("found a piece: "); _pn(parse_buffer);
     int code;
-    if (str_to_int(parse_buffer, &code) && code >= 0) {
+    if (str_to_int(parse_buffer, &code, 10) && code >= 0) {
       _pn("decoded int");
       if (counter < ACTION_KB_CODES_MAX) {
         p->keyboard.codes[counter] = code;
@@ -216,16 +227,16 @@ bool parser_keyboard(char* input, const char delim, payload* p) {
   return counter > 0;
 }
 
-bool action_keyboard(payload p) {
+bool action_keyboard(payload p, bool state) {
+  _pn("KEYBOARD");
   for (int i=0; i < p.keyboard.len; i++) {
-    Keyboard.press(p.keyboard.codes[i]);
-    //Keyboard.release(p.keyboard.codes[i]);
+    if (state) {Keyboard.press(p.keyboard.codes[i]);}
+    else Keyboard.release(p.keyboard.codes[i]);
   }
-  Keyboard.releaseAll();
 }
 
-bool action_mouse(payload p) {
-  _pn("MO ");
+bool action_mouse(payload p, bool state) {
+  _pn("MOUSE");
   for (int i = 0; i < 20; i++) {
     Mouse.move(-127, -127, 0);
     Mouse.move(-127, -127, 0);
@@ -245,6 +256,39 @@ bool action_mouse(payload p) {
   Mouse.move(127,127);
 }
 
-bool action_midi(payload p) {
-  _pn("MI ");
+bool parser_midi(char* input, const char delim, payload* p) {
+  _pn("parsing midi action section");
+  int counter = 0;
+  int buffer_pos = 0;
+  while (strtok_better(parse_buffer, READ_BUFFER_LEN, &buffer_pos, input, delim)) {
+    _p("found a piece: "); _pn(parse_buffer);
+    int code;
+    if (str_to_int(parse_buffer, &code, 16) && code >= 0 && code <= 127) {
+      _pn("decoded hex int");
+      if (counter <= 2 && code > 15) {_pn("first 3 midi codes shoud be 'f' or less! Wrong data, ignoring payload."); return false;}
+      switch (counter) {
+        case 0: p->midi.cin = code; break;
+        case 1: p->midi.type = code; break;
+        case 2: p->midi.channel = code; break;
+        case 3: p->midi.data1 = code; break;
+        case 4: p->midi.data2 = code; return true;  // already collected all values, ignoring rest of data
+      }
+    } else {
+      _pn("wrong code for midi input: "); _p(parse_buffer); _pn("; ignoring action payload");
+      break;
+    }
+    counter++;
+  }
+  return false;
+}
+
+bool action_midi(payload p, bool state) {
+  _pn("MIDI");
+  uint8_t type = p.midi.type;
+  uint8_t cin = p.midi.cin;
+  if (p.midi.type == 0x9) type = cin = (state) ? 0x9 : 0x8;
+  if (p.midi.type == 0x8) type = cin = (state) ? 0x8 : 0x9;
+  midiEventPacket_t event = {cin, type << 4 | p.midi.channel, p.midi.data1, p.midi.data2};
+  MidiUSB.sendMIDI(event);
+  MidiUSB.flush();
 }

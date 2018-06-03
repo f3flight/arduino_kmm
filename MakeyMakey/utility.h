@@ -60,10 +60,10 @@ bool serial_readbytes_until(uint8_t buffer[], int buffer_len, int* buffer_pos, u
 #include <limits.h>
 #include <errno.h>
 // based on https://wiki.sei.cmu.edu/confluence/display/c/ERR34-C.+Detect+errors+when+converting+a+string+to+a+number
-bool str_to_int(const char* buff, int* out_int) {
+bool str_to_int(const char* buff, int* out_int, int base) {
   char *end;
   errno = 0;
-  const long sl = strtol(buff, &end, 10);
+  const long sl = strtol(buff, &end, base);
   if (end == buff) {
     //fprintf(stderr, "%s: not a decimal number\n", buff);
   } else if ('\0' != *end) {
@@ -105,3 +105,5 @@ void _p(const char c) {Serial.print(c);}
 void _pn(const char c) {Serial.println(c);}
 void _p(const int i) {Serial.print(i);}
 void _pn(const int i) {Serial.println(i);}
+void _p(const unsigned int i) {Serial.print(i);}
+void _pn(const unsigned int i) {Serial.println(i);}

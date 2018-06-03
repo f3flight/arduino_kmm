@@ -14,12 +14,14 @@
 #include "makeymakey_pins.h"
 #include "utility.h"
 
-bool input_state[NUM_INPUT_PINS];
+bool input_state[NUM_INPUT_PINS] = {false};
 
 const char NUM_ACTIONS = 3;
 
 const int ACTION_NAME_LEN_MAX = 6;
 const int ACTION_KB_CODES_MAX = 6;
+const int PIN_ACTIONS_MAX = 3;
+
 struct keyboard_payload {
   uint8_t len;
   uint8_t codes[ACTION_KB_CODES_MAX];
@@ -51,11 +53,14 @@ const function_link function_map[NUM_ACTIONS] = {
 
 struct input_action {
   action_function action;
-  struct payload p;
+  payload p;
+  bool execute() {
+    return action(p);
+  }
 };
 
-input_action pin_actions[NUM_PINS][4] = {};
-input_action run_action;
+input_action pin_actions[NUM_PINS][PIN_ACTIONS_MAX] = {};
+input_action parsed_action;
 
 const char DELIM = ' ';
 const char INNER_DELIM = ',';
@@ -66,19 +71,24 @@ short read_buffer_pos = 0;
 
 void setup() {
   Keyboard.begin();
+  Mouse.begin();
   for (int i = 0; i < NUM_PINS; i++) {pinMode(i, INPUT); digitalWrite(i, LOW);}
   pinMode(OUTPUT_D14, OUTPUT); digitalWrite(OUTPUT_D14, LOW);
   pinMode(OUTPUT_D16, OUTPUT); digitalWrite(OUTPUT_D16, LOW);
 }
 
 void loop() {
-    for (int i = 0; i < NUM_INPUT_PINS; i++) {
-      bool state = (digitalRead(INPUT_PINS[i]) == LOW);
-      if (input_state[i] != state) {
-        Serial.print("input "); Serial.print(INPUT_PINS[i]); Serial.print(" new state "); Serial.println(state);
-        input_state[i] = state;
+    for (int pin = 0; pin < NUM_INPUT_PINS; pin++) {
+      bool state = (digitalRead(INPUT_PINS[pin]) == LOW);
+      if (input_state[pin] != state) {
+        _p("input "); _p(pin); _p(" new state "); _pn(state);
+        input_state[pin] = state;
+        for (int i = 0; i < PIN_ACTIONS_MAX; i++) {
+          if (pin_actions[pin][i].action == nullptr) break;
+          pin_actions[pin][i].execute();
+        }
         // int action = (state) ? 0x90 : 0x80;
-        // midiEventPacket_t noteOn = {0x09, action | 0, 48 + i, 127};
+        // midiEventPacket_t noteOn = {0x09, action | 0, 48 + pin, 127};
         // MidiUSB.sendMIDI(noteOn);
         // MidiUSB.flush();
       }
@@ -99,8 +109,6 @@ void parse_input(char* input, const char delim) {  // input must be a proper 0-t
   bool get = false, set = false, test = false, run = false;
   int counter = 0;
   int input_num = 0;
-  action_function action;
-  payload p;
   while (strtok_better(parse_buffer, READ_BUFFER_LEN, &buffer_pos, input, delim)) {
     if (counter == 0) {
       if (strcmp(parse_buffer, "get") == 0) {get = true;}
@@ -113,9 +121,9 @@ void parse_input(char* input, const char delim) {  // input must be a proper 0-t
       }
     } else if (run) {
       _p("running: "); _pn(parse_buffer);
-      if (parse_action(parse_buffer, INNER_DELIM, &action, &p)) {
+      if (parse_action(parse_buffer, INNER_DELIM, &(parsed_action.action), &(parsed_action.p))) {
         _pn("parsed action, executing");
-        action(p);
+        parsed_action.execute();
       }
     } else if (get || (set && counter == 1) || test) {
       if (!str_to_int(parse_buffer, &input_num) || input_num < 0 || input_num > NUM_INPUT_PINS - 1) {
@@ -125,13 +133,28 @@ void parse_input(char* input, const char delim) {  // input must be a proper 0-t
       //Serial.print("input pin = "); Serial.println(input_num);
       if (get) {
         _p("getting config of input "); _pn(input_num);
+        for (int i = 0; i < PIN_ACTIONS_MAX; i++) {
+          if (pin_actions[input_num][i].action == nullptr) break;
+          _p("has "); _p(pin_actions[input_num][i].p.keyboard.len); _pn(" keyboard codes saved");
+        }
       } else if (set) {
         _p("clearing config for input "); _pn(input_num);
+        for (int i = 0; i < PIN_ACTIONS_MAX; i++) {
+          pin_actions[input_num][i].action = nullptr;
+        }
       } else if (test) {
         _p("simulating trigger of input "); _pn(input_num);
       }
     } else if (set) {
+      if (counter - 2 >= PIN_ACTIONS_MAX) {
+        _p("Too many actions, max allowed: "); _p(PIN_ACTIONS_MAX); _pn(", ignoring rest...");
+        break;
+      }
       _p("setting config for input "); _p(input_num); _p(": "); _pn(parse_buffer);
+      if (parse_action(parse_buffer, INNER_DELIM, &(parsed_action.action), &(parsed_action.p))) {
+        _pn("parsed action, setting");
+        pin_actions[input_num][counter-2] = parsed_action;
+      }
     }
     counter++;
   }
@@ -202,9 +225,26 @@ bool action_keyboard(payload p) {
 }
 
 bool action_mouse(payload p) {
-  Serial.println("MO "); //Serial.println(input.var_a);
+  _pn("MO ");
+  for (int i = 0; i < 20; i++) {
+    Mouse.move(-127, -127, 0);
+    Mouse.move(-127, -127, 0);
+    Mouse.move(-127, -127, 0);
+    Mouse.move(-127, -127, 0);
+    Mouse.move(-127, -127, 0);
+    Mouse.move(-127, -127, 0);
+    Mouse.move(-127, -127, 0);
+    Mouse.move(-127, -127, 0);
+    Mouse.move(-127, -127, 0);
+    Mouse.move(-127, -127, 0);
+    Mouse.move(-127, -127, 0);
+    Mouse.move(-127, -127, 0);
+    Mouse.move(-127, -127, 0);
+    Mouse.move(-127, -127, 0);
+  }
+  Mouse.move(127,127);
 }
 
 bool action_midi(payload p) {
-  Serial.println("MI "); //Serial.println(p.midi...);
+  _pn("MI ");
 }

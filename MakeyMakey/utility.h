@@ -107,3 +107,5 @@ void _p(const int i) {Serial.print(i);}
 void _pn(const int i) {Serial.println(i);}
 void _p(const unsigned int i) {Serial.print(i);}
 void _pn(const unsigned int i) {Serial.println(i);}
+void _p(const __FlashStringHelper* s) {Serial.print(s);}
+void _pn(const __FlashStringHelper* s) {Serial.println(s);}

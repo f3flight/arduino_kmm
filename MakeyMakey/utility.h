@@ -1,3 +1,16 @@
+void _p(const uint8_t b[]) {Serial.print((char*)b);}
+void _pn(const uint8_t b[]) {Serial.println((char*)b);}
+void _p(const char* s) {Serial.print(s);}
+void _pn(const char* s) {Serial.println(s);}
+void _p(const char c) {Serial.print(c);}
+void _pn(const char c) {Serial.println(c);}
+void _p(const int i) {Serial.print(i);}
+void _pn(const int i) {Serial.println(i);}
+void _p(const unsigned int i) {Serial.print(i);}
+void _pn(const unsigned int i) {Serial.println(i);}
+void _p(const __FlashStringHelper* s) {Serial.print(s);}
+void _pn(const __FlashStringHelper* s) {Serial.println(s);}
+
 // Non-blocking line or byte reader utilizing external buffer and buffer position. Version 1.1.2018.05.31.0
 // Defaults for optional parameters are to work in line reading mode. Cast output to (char*) and there you go.
 // params:
@@ -10,20 +23,18 @@
 //                        if true, will return data chunk (without delimiter) when buffer size is reached, no data is lost in this case;
 //                        you can use buffer_pos to detect overflow when overflow_keep = true:
 //                        if (buffer_pos < 0) {} // overflow happened
-//   delim (opt): delimiter to look for, defaults to newline symbol '\n'
+//   delims (opt): delimiters to look for, defaults to CR and NL symbols - "\r\n"
 //   delim_to_zero (opt): if true (default), will replace delimiter with 0 byte '\0'
 //                        if false, delimeter is copied to out as-is
-//   drop_special_byte (opt): if true (default), skip a specific byte value, if found
-//   special_byte (opt): which byte value to skip, works when drop_special_byte = true. Defaults to carriage return symbol '\r'.
 //   max_wait_millis (opt): after how many milliseconds to stop reading serial and return false;
 //                          this allows using the function in a loop, with low cost of each call,
 //                          accumulating data over time and eventually returning it when delimiter is found.
 //
 bool serial_readbytes_until(uint8_t buffer[], int buffer_len, int* buffer_pos, uint8_t out[], int* out_len = nullptr, bool overflow_keep = false,
-                            uint8_t delim = '\n', bool delim_to_zero = true, bool drop_special_byte = true, uint8_t special_byte = '\r',
-                            int max_wait_millis = 10) {
+                            uint8_t delims[] = "\r\n", int delims_len = 2, bool delim_to_zero = true, int max_wait_millis = 10) {
   int32_t time = millis();
-  bool read = false;
+  bool read = false, break_flag = false;
+  uint8_t i;
   if (*buffer_pos < 0) *buffer_pos = 0;  // resetting overflow indication
   while (Serial.available() > 0) {
     if (millis() - time > max_wait_millis && read) break;  // locking protection on high data inflow, but allow at least 1 byte to be read
@@ -35,22 +46,32 @@ bool serial_readbytes_until(uint8_t buffer[], int buffer_len, int* buffer_pos, u
         return true;
       } else {
         uint8_t x = Serial.read();
-        if (x == delim) {*buffer_pos = 0;}  // dropping all accumulated data and all subsequent data until delimiter is found
+        for (i = 0; i < delims_len; i++) {
+          if (x == delims[i]) {*buffer_pos = 0; break;}  // dropping all accumulated data and all subsequent data until delimiter is found
+        }
         continue;
       }
     }
     uint8_t x = Serial.read();
-    if (drop_special_byte && x == special_byte) continue;
+    // _p(F("read byte = ")); _pn(x);
     read = true;
     buffer[*buffer_pos] = x;
-    if (x == delim) {  // found delimiter
-      if (delim_to_zero) buffer[*buffer_pos] = '\0';  // replacing delimiter with 0 byte
-      if (*buffer_pos > 0) {  // have data, returning result
-        memcpy(out, buffer, 1 + (*buffer_pos));
-        if (out_len != nullptr) *out_len = *buffer_pos;
-        *buffer_pos = 0;
-        return true;
-      } else {*buffer_pos = 0; continue;}  // there was no data before delimiter, skipping and resetting buffer position
+    for (i = 0; i < delims_len; i++) {
+      if (x == delims[i]) {  // found delimiter
+        // _p(F("found delimiter ")); _p(i); _p(F(" = ")); _p(x); _p(F(" at buffer_pos = ")); _p(*buffer_pos); if (*buffer_pos > 0) {_p(F("; prev. symbol = ")); _pn(buffer[*buffer_pos-1]);} else {_pn('_');}
+        if (delim_to_zero) buffer[*buffer_pos] = '\0';  // replacing delimiter with 0 byte
+        if (*buffer_pos > 0) {  // have data, returning result
+          memcpy(out, buffer, 1 + (*buffer_pos));
+          if (out_len != nullptr) *out_len = *buffer_pos;
+          *buffer_pos = 0;
+          return true;
+        } else {break_flag = true; break;}  // there was no data before delimiter, skipping and resetting buffer position
+      }
+    }
+    if (break_flag) {
+      // _pn(F("there was no data before delimiter;"));
+      *buffer_pos = 0;
+      break;
     }
     (*buffer_pos)++;
   }
@@ -96,16 +117,3 @@ bool strtok_better(char buffer[], int buffer_len, int* buffer_pos, char* input, 
   }
   return false;
 }
-
-void _p(const uint8_t b[]) {Serial.print((char*)b);}
-void _pn(const uint8_t b[]) {Serial.println((char*)b);}
-void _p(const char* s) {Serial.print(s);}
-void _pn(const char* s) {Serial.println(s);}
-void _p(const char c) {Serial.print(c);}
-void _pn(const char c) {Serial.println(c);}
-void _p(const int i) {Serial.print(i);}
-void _pn(const int i) {Serial.println(i);}
-void _p(const unsigned int i) {Serial.print(i);}
-void _pn(const unsigned int i) {Serial.println(i);}
-void _p(const __FlashStringHelper* s) {Serial.print(s);}
-void _pn(const __FlashStringHelper* s) {Serial.println(s);}

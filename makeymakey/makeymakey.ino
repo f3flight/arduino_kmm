@@ -14,7 +14,12 @@
 #include "makeymakey_pins.h"
 #include "utility.h"
 
+const uint8_t TYPE_MOMENTARY = 0;
+const uint8_t TYPE_PERSISTENT = 1;
+const uint8_t TYPE_M_TO_P = 2;
+
 bool input_state[NUM_INPUT_PINS] = {false};
+uint8_t input_type[NUM_INPUT_PINS] = {TYPE_MOMENTARY};
 
 const char NUM_ACTIONS = 3;
 
@@ -117,14 +122,16 @@ void loop() {
 
 void parse_input(char* input, const char delim) {  // input must be a proper 0-terminated string
   int buffer_pos = 0;
-  bool get = false, set = false, test = false, run = false;
+  bool get = false, set = false, test = false, type = false, run = false;
   int counter = 0;
   int input_num = 0;
+  int parsed_input_type = 0;
   while (strtok_better(parse_buffer, READ_BUFFER_LEN, &buffer_pos, input, delim)) {
     if (counter == 0) {
       if (strcmp(parse_buffer, "get") == 0) {get = true;}
       else if (strcmp(parse_buffer, "set") == 0) {set = true;}
       else if (strcmp(parse_buffer, "test") == 0) {test = true;}
+      else if (strcmp(parse_buffer, "type") == 0) {type = true;}
       else if (strcmp(parse_buffer, "run") == 0) {run = true;}
       else if (strcmp(parse_buffer, "info") == 0) {debug_info(); break;}
       else {
@@ -138,7 +145,7 @@ void parse_input(char* input, const char delim) {  // input must be a proper 0-t
         parsed_action.execute(true);
         parsed_action.execute(false);
       }
-    } else if (get || (set && counter == 1) || test) {
+    } else if (get || (set && counter == 1) || test || (type && counter == 1)) {
       if (!str_to_int(parse_buffer, &input_num, 10) || input_num < 0 || input_num > NUM_INPUT_PINS - 1) {
         _pn(F("Are you trying to break me? This input pin number is bad."));
         break;
@@ -157,6 +164,8 @@ void parse_input(char* input, const char delim) {  // input must be a proper 0-t
         }
       } else if (test) {
         _p(F("simulating trigger of input ")); _pn(input_num);
+      } else if (type) {
+        _p(F("input ")); _p(input_num); _p(F(" type = ")); _pn(input_type[input_num]);
       }
     } else if (set) {
       if (counter - 2 >= PIN_ACTIONS_MAX) {
@@ -168,6 +177,13 @@ void parse_input(char* input, const char delim) {  // input must be a proper 0-t
         _pn(F("parsed action, setting"));
         pin_actions[input_num][counter-2] = parsed_action;
       }
+    } else if (type) {
+      if (!str_to_int(parse_buffer, &parsed_input_type, 10) || parsed_input_type < 0 || parsed_input_type > 2) {
+        _pn(F("Are you trying to break me? This input type is bad."));
+        break;
+      }
+      input_type[input_num] = parsed_input_type;
+      _p(F("Set input type to: ")); _pn(parsed_input_type);
     }
     counter++;
   }

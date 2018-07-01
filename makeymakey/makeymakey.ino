@@ -304,9 +304,11 @@ bool action_midi(payload p, bool state) {
   _pn(F("MIDI"));
   uint8_t type = p.midi.type;
   uint8_t cin = p.midi.cin;
+  uint8_t data2 = p.midi.data2;
   if (p.midi.type == 0x9) type = cin = (state) ? 0x9 : 0x8;
   if (p.midi.type == 0x8) type = cin = (state) ? 0x8 : 0x9;
-  midiEventPacket_t event = {cin, type << 4 | p.midi.channel, p.midi.data1, p.midi.data2};
+  if (p.midi.type == 0xb) data2 = (state) ? data2 : 0;
+  midiEventPacket_t event = {cin, type << 4 | p.midi.channel, p.midi.data1, data2};
   MidiUSB.sendMIDI(event);
   MidiUSB.flush();
 }

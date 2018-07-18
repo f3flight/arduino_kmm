@@ -2,6 +2,10 @@
 #include <Keyboard.h>
 
 // Mouse - Version: Latest 
+#include <EEPROM.h>
+
+const int EEPROM_SIZE = 1024;
+
 #include <Mouse.h>
 
 // MIDIUSB - Version: Latest 
@@ -20,6 +24,7 @@ const uint8_t TYPE_M_TO_P = 2;
 
 bool input_state[NUM_INPUT_PINS] = {false};
 uint8_t input_type[NUM_INPUT_PINS] = {TYPE_MOMENTARY};
+bool input_state_m_to_p[NUM_INPUT_PINS] = {false};
 
 const char NUM_ACTIONS = 3;
 
@@ -40,9 +45,21 @@ struct midi_payload {
   uint8_t data2;
 };
 
+struct mouse_buttons {
+  uint8_t left  : 1;
+  uint8_t right : 1;
+};
+
+struct mouse_payload {
+  uint8_t x;
+  uint8_t y;
+  mouse_buttons buttons;
+};
+
 union payload {
   keyboard_payload keyboard;
   midi_payload midi;
+  mouse_payload mouse;
 };
 
 typedef bool(*parse_function)(char*, const char, payload*);
@@ -55,6 +72,7 @@ struct function_link {
 };
 
 bool parser_keyboard(char* input, const char delim, payload* p);
+bool parser_mouse(char* input, const char delim, payload* p);
 bool parser_midi(char* input, const char delim, payload* p);
 bool action_keyboard(payload input, bool state);
 bool action_mouse(payload input, bool state);
@@ -62,15 +80,15 @@ bool action_midi(payload input, bool state);
 
 const function_link function_map[NUM_ACTIONS] = {
   {"kb", &action_keyboard, &parser_keyboard},
-  {"mouse", &action_mouse},
+  {"mouse", &action_mouse, &parser_mouse},
   {"midi", &action_midi, &parser_midi},
 };
 
 struct input_action {
-  action_function action;
+  int action_id = -1;
   payload p;
   bool execute(bool state) {
-    return action(p, state);
+    return function_map[action_id].action(p, state);
   }
 };
 
@@ -96,17 +114,22 @@ void setup() {
 void loop() {
     for (int pin = 0; pin < NUM_INPUT_PINS; pin++) {
       bool state = (digitalRead(INPUT_PINS[pin]) == LOW);
+      if (input_type[pin] == TYPE_M_TO_P) {
+        if (state && !input_state_m_to_p[pin]) {
+          input_state_m_to_p[pin] = true;
+          state = !input_state[pin];
+        } else {
+          if (!state) input_state_m_to_p[pin] = false;
+          state = input_state[pin];
+        }
+      }
       if (input_state[pin] != state) {
         _p(F("input ")); _p(pin); _p(F(" new state ")); _pn(state);
         input_state[pin] = state;
         for (int i = 0; i < PIN_ACTIONS_MAX; i++) {
-          if (pin_actions[pin][i].action == nullptr) break;
+          if (pin_actions[pin][i].action_id == -1) break;
           pin_actions[pin][i].execute(state);
         }
-        // int action = (state) ? 0x90 : 0x80;
-        // midiEventPacket_t noteOn = {0x09, action | 0, 48 + pin, 127};
-        // MidiUSB.sendMIDI(noteOn);
-        // MidiUSB.flush();
       }
     }
     uint8_t input[READ_BUFFER_LEN] = {0};
@@ -133,6 +156,29 @@ void parse_input(char* input, const char delim) {  // input must be a proper 0-t
       else if (strcmp(parse_buffer, "test") == 0) {test = true;}
       else if (strcmp(parse_buffer, "type") == 0) {type = true;}
       else if (strcmp(parse_buffer, "run") == 0) {run = true;}
+      else if (strcmp(parse_buffer, "reset") == 0) {
+        for (int i = 0; i < NUM_PINS; i++) {
+          for (int j = 0; j < PIN_ACTIONS_MAX; j++) {
+            pin_actions[i][j].action_id = -1;
+          }
+        }
+      }
+      else if (strcmp(parse_buffer, "save") == 0) {
+        if (sizeof(pin_actions) + sizeof(input_type) > EEPROM_SIZE) {
+          _pn("Data does not fit into EEPROM, cannot save!");
+          break;
+        }
+        EEPROM.put(0, pin_actions);
+        for (int i = 0; i < sizeof(input_type); i++) {
+          EEPROM.put(EEPROM_SIZE - i - 1, input_type[i]);
+        }
+      }
+      else if (strcmp(parse_buffer, "load") == 0) {
+        EEPROM.get(0, pin_actions);
+        for (int i = 0; i < sizeof(input_type); i++) {
+          EEPROM.get(EEPROM_SIZE - i - 1, input_type[i]);
+        }
+      }
       else if (strcmp(parse_buffer, "info") == 0) {debug_info(); break;}
       else {
         _pn(F("don't know whatcha talkin' 'bout!"));
@@ -140,7 +186,7 @@ void parse_input(char* input, const char delim) {  // input must be a proper 0-t
       }
     } else if (run) {
       _p(F("running: ")); _pn(parse_buffer);
-      if (parse_action(parse_buffer, INNER_DELIM, &(parsed_action.action), &(parsed_action.p))) {
+      if (parse_action(parse_buffer, INNER_DELIM, &parsed_action)) {
         _pn(F("parsed action, executing"));
         parsed_action.execute(true);
         parsed_action.execute(false);
@@ -154,13 +200,13 @@ void parse_input(char* input, const char delim) {  // input must be a proper 0-t
       if (get) {
         _p(F("getting config of input ")); _pn(input_num);
         for (int i = 0; i < PIN_ACTIONS_MAX; i++) {
-          if (pin_actions[input_num][i].action == nullptr) break;
-          _p(F("has ")); _p(pin_actions[input_num][i].p.keyboard.len); _pn(F(" keyboard codes saved"));
+          if (pin_actions[input_num][i].action_id == -1) break;
+          _p(F("has ")); _pn(function_map[pin_actions[input_num][i].action_id].action_name);
         }
       } else if (set) {
         _p(F("clearing config for input ")); _pn(input_num);
         for (int i = 0; i < PIN_ACTIONS_MAX; i++) {
-          pin_actions[input_num][i].action = nullptr;
+          pin_actions[input_num][i].action_id = -1;
         }
       } else if (test) {
         _p(F("simulating trigger of input ")); _pn(input_num);
@@ -173,7 +219,7 @@ void parse_input(char* input, const char delim) {  // input must be a proper 0-t
         break;
       }
       _p(F("setting config for input ")); _p(input_num); _p(F(": ")); _pn(parse_buffer);
-      if (parse_action(parse_buffer, INNER_DELIM, &(parsed_action.action), &(parsed_action.p))) {
+      if (parse_action(parse_buffer, INNER_DELIM, &parsed_action)) {
         _pn(F("parsed action, setting"));
         pin_actions[input_num][counter-2] = parsed_action;
       }
@@ -189,7 +235,7 @@ void parse_input(char* input, const char delim) {  // input must be a proper 0-t
   }
 }
 
-bool parse_action(char* input, const char delim, action_function* action, payload* p) {
+bool parse_action(char* input, const char delim, input_action* action) {
   _pn(F("parsing action"));
   bool found = false;
   parse_function parser = nullptr;
@@ -198,13 +244,13 @@ bool parse_action(char* input, const char delim, action_function* action, payloa
   if (strtok_better(parse_buffer, READ_BUFFER_LEN, &buffer_pos, input, delim)) {
     for (int i=0; i < NUM_ACTIONS; i++) {
       if (strcmp(parse_buffer, function_map[i].action_name) == 0) {
-        *action = function_map[i].action;
+        action->action_id = i;
         parser = function_map[i].parser;
         _p(F("found action - ")); _pn(function_map[i].action_name);
         if (parser != nullptr) {  // action has a parser, need to parse payload
           if (buffer_pos < len) {  // there is some payload for this action
             _pn(F("there is some payload for this action"));
-            if (parser(input+buffer_pos+1, delim, p)) {
+            if (parser(input+buffer_pos+1, delim, &(action->p))) {
               _pn(F("was able to parse!"));
               return true;
             }
@@ -253,25 +299,34 @@ bool action_keyboard(payload p, bool state) {
   }
 }
 
+bool parser_mouse(char* input, const char delim, payload* p) {
+  _pn(F("parsing mouse action section"));
+  int counter = 0;
+  int buffer_pos = 0;
+  while (strtok_better(parse_buffer, READ_BUFFER_LEN, &buffer_pos, input, delim)) {
+    _p(F("found a piece: ")); _pn(parse_buffer);
+    int code;
+    if (str_to_int(parse_buffer, &code, 10) && code >= -127 && code <= 127) {
+      _pn(F("decoded dec int"));
+      switch (counter) {
+        case 0: p->mouse.x = code; break;
+        case 1: p->mouse.y = code; break;
+        case 2: p->mouse.buttons.left = (code > 0) ? 1 : 0; return true;
+      }
+    } else {
+      _pn(F("wrong value for mouse input: ")); _p(parse_buffer); _pn(F("; ignoring action payload"));
+      break;
+    }
+    counter++;
+  }
+  return false;
+}
+
 bool action_mouse(payload p, bool state) {
   _pn(F("MOUSE"));
-  for (int i = 0; i < 20; i++) {
-    Mouse.move(-127, -127, 0);
-    Mouse.move(-127, -127, 0);
-    Mouse.move(-127, -127, 0);
-    Mouse.move(-127, -127, 0);
-    Mouse.move(-127, -127, 0);
-    Mouse.move(-127, -127, 0);
-    Mouse.move(-127, -127, 0);
-    Mouse.move(-127, -127, 0);
-    Mouse.move(-127, -127, 0);
-    Mouse.move(-127, -127, 0);
-    Mouse.move(-127, -127, 0);
-    Mouse.move(-127, -127, 0);
-    Mouse.move(-127, -127, 0);
-    Mouse.move(-127, -127, 0);
-  }
-  Mouse.move(127,127);
+  if (!state) {return false;}
+  Mouse.move(p.mouse.x, p.mouse.y);
+  if (p.mouse.buttons.left > 0) {Mouse.click();}
 }
 
 bool parser_midi(char* input, const char delim, payload* p) {

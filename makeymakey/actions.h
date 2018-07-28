@@ -67,7 +67,7 @@ const char EVENT_RELEASE = 'r';
 const char EVENT_LONG_PRESS = 'l';
 const char EVENT_LONG_PRESS_AUTO_RELEASE = 'b';
 const char EVENTS[NUM_EVENTS] = {EVENT_PRESS_AUTO_RELEASE, EVENT_PRESS, EVENT_RELEASE, EVENT_LONG_PRESS, EVENT_LONG_PRESS_AUTO_RELEASE};
-/* 
+/*
  *  EVENT_PRESS_AUTO_RELEASE is default and can be omitted. This allows setting press event action, and release event will be called with opposite action.
  *  i.e. if press is midi note on -> release will be midi note off
  *  Supported auto-release actions (payload transform in brackets): kb (keys released on input release); midi type NOTE_ON 0x9 (->0x8), NOTE_OFF 0x8 (->0x9), CC 0xb (data -> 0)

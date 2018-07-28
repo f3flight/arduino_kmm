@@ -19,17 +19,19 @@ const int EEPROM_SIZE = 1024;
 #include "utility.h"
 #include "actions.h"
 
-const uint8_t TYPE_MOMENTARY = 0;
-const uint8_t TYPE_PERSISTENT = 1;
-const uint8_t TYPE_M_TO_P = 2;
-
 bool input_state[NUM_INPUT_PINS] = {false};
-uint8_t input_type[NUM_INPUT_PINS] = {TYPE_MOMENTARY};
 bool input_state_m_to_p[NUM_INPUT_PINS] = {false};
 unsigned long input_long_press_timer[NUM_INPUT_PINS] = {0};
 bool input_long_press_fired[NUM_INPUT_PINS] = {0};
 
 const int LONG_PRESS_MS = 500; // 500ms will trigger long press event(s)
+
+const uint8_t TYPE_MOMENTARY = 0;
+const uint8_t TYPE_PERSISTENT = 1;
+const uint8_t TYPE_M_TO_P = 2;
+const uint8_t TYPE_M_ALLOW_BOTH_PRESSES = 3; // this type allows events of type "EVENT_PRESS*" fire even if there is an event of type "EVENT_LONG_PRESS*" and LONG_PRESS_MS time has not passed;
+
+uint8_t input_type[NUM_INPUT_PINS] = {TYPE_MOMENTARY};
 
 const char* DELIM = " ";
 const char* INNER_DELIM = ",";
@@ -52,10 +54,6 @@ void loop() {
       if (state == STATE_PRESSED && input_long_press_timer[pin] == 0) {
         input_long_press_timer[pin] = millis();
       }
-      if (state == STATE_RELEASED) {
-        input_long_press_timer[pin] = 0;
-        input_long_press_fired[pin] = 0;
-      }
       if (input_type[pin] == TYPE_M_TO_P) {
         if (state == STATE_PRESSED && !input_state_m_to_p[pin]) {
           input_state_m_to_p[pin] = true;
@@ -68,9 +66,28 @@ void loop() {
       if (input_state[pin] != state) {
         _p(F("input ")); _p(pin); _p(F(" new state ")); _pn(state);
         input_state[pin] = state;
+        bool has_long_press_events = false;
+        for (int i = 0; i < PIN_ACTIONS_MAX; i++) {
+          if (pin_actions[pin][i].event == EVENT_LONG_PRESS || pin_actions[pin][i].event == EVENT_LONG_PRESS_AUTO_RELEASE) {
+            has_long_press_events = true;
+            break;
+          }
+        }
         for (int i = 0; i < PIN_ACTIONS_MAX; i++) {
           if (pin_actions[pin][i].action_id == -1) break;
-          pin_actions[pin][i].execute(state);
+          if (input_type[pin] == TYPE_M_ALLOW_BOTH_PRESSES) {
+            pin_actions[pin][i].execute(state);
+          } else {
+            if (state == STATE_PRESSED && has_long_press_events) continue; // do not fire press event if three's a chance that long press will happen
+            if (state == STATE_RELEASED) {
+              if (pin_actions[pin][i].event == EVENT_PRESS_AUTO_RELEASE && input_long_press_fired[pin] == 1) continue; // do not fire auto-release of press if long press happened instead
+              if (pin_actions[pin][i].event == EVENT_LONG_PRESS_AUTO_RELEASE && input_long_press_fired[pin] == 0) continue; // do not fire auto-release of long-press which didn't happen
+              if (has_long_press_events && input_long_press_fired[pin] == 0) { // fire normal press if long press did not happen and we released the button
+                pin_actions[pin][i].execute(STATE_PRESSED);
+              }
+            }
+            pin_actions[pin][i].execute(state);
+          }
         }
       } else if (state == STATE_PRESSED && input_long_press_fired[pin] == 0 && millis() - input_long_press_timer[pin] >= LONG_PRESS_MS) { // time to fire log press events
         input_long_press_fired[pin] = 1;
@@ -78,6 +95,10 @@ void loop() {
           if (pin_actions[pin][i].action_id == -1) break;
           pin_actions[pin][i].execute(STATE_LONG_PRESSED);
         }
+      }
+      if (state == STATE_RELEASED) {
+        input_long_press_timer[pin] = 0;
+        input_long_press_fired[pin] = 0;
       }
     }
     uint8_t input[READ_BUFFER_LEN] = {0};

@@ -17,6 +17,7 @@ const int EEPROM_SIZE = 1024;
 
 #include "makeymakey_pins.h"
 #include "utility.h"
+#include "actions.h"
 
 const uint8_t TYPE_MOMENTARY = 0;
 const uint8_t TYPE_PERSISTENT = 1;
@@ -26,80 +27,10 @@ bool input_state[NUM_INPUT_PINS] = {false};
 uint8_t input_type[NUM_INPUT_PINS] = {TYPE_MOMENTARY};
 bool input_state_m_to_p[NUM_INPUT_PINS] = {false};
 
-const char NUM_ACTIONS = 3;
-
-const int ACTION_NAME_LEN_MAX = 6;
-const int ACTION_KB_CODES_MAX = 6;
-const int PIN_ACTIONS_MAX = 3;
-
-struct keyboard_payload {
-  uint8_t len;
-  uint8_t codes[ACTION_KB_CODES_MAX];
-};
-
-struct midi_payload {
-  uint8_t cin;  // "Code Index Number", 4 bits - used specifically in USB MIDI implementation and in most cases duplicates type value.
-  uint8_t type: 4;
-  uint8_t channel: 4;
-  uint8_t data1;
-  uint8_t data2;
-};
-
-struct mouse_buttons {
-  uint8_t left  : 1;
-  uint8_t right : 1;
-};
-
-struct mouse_payload {
-  uint8_t x;
-  uint8_t y;
-  mouse_buttons buttons;
-};
-
-union payload {
-  keyboard_payload keyboard;
-  midi_payload midi;
-  mouse_payload mouse;
-};
-
-typedef bool(*parse_function)(char*, const char, payload*);
-typedef bool(*action_function)(payload, bool);
-
-struct function_link {
-  char action_name[ACTION_NAME_LEN_MAX];
-  action_function action;
-  parse_function parser;
-};
-
-bool parser_keyboard(char* input, const char delim, payload* p);
-bool parser_mouse(char* input, const char delim, payload* p);
-bool parser_midi(char* input, const char delim, payload* p);
-bool action_keyboard(payload input, bool state);
-bool action_mouse(payload input, bool state);
-bool action_midi(payload input, bool state);
-
-const function_link function_map[NUM_ACTIONS] = {
-  {"kb", &action_keyboard, &parser_keyboard},
-  {"mouse", &action_mouse, &parser_mouse},
-  {"midi", &action_midi, &parser_midi},
-};
-
-struct input_action {
-  int action_id = -1;
-  payload p;
-  bool execute(bool state) {
-    return function_map[action_id].action(p, state);
-  }
-};
-
-input_action pin_actions[NUM_PINS][PIN_ACTIONS_MAX] = {};
-input_action parsed_action;
-
-const char DELIM = ' ';
-const char INNER_DELIM = ',';
+const char* DELIM = " ";
+const char* INNER_DELIM = ",";
 const short READ_BUFFER_LEN = 100;
 uint8_t read_buffer[READ_BUFFER_LEN] = {0};
-uint8_t parse_buffer[READ_BUFFER_LEN] = {0};
 short read_buffer_pos = 0;
 
 void setup() {
@@ -143,27 +74,33 @@ void loop() {
     delay(50);
 }
 
-void parse_input(char* input, const char delim) {  // input must be a proper 0-terminated string
+void parse_input(char* input, const char* delims) {  // input must be a proper 0-terminated string
   int buffer_pos = 0;
   bool get = false, set = false, test = false, type = false, run = false;
   int counter = 0;
   int input_num = 0;
   int parsed_input_type = 0;
-  while (strtok_better(parse_buffer, READ_BUFFER_LEN, &buffer_pos, input, delim)) {
+  //char* input_copy[READ_BUFFER_LEN] = {0};
+  //strcpy(input_copy, input);
+  //char* token = strtok(input_copy, delims);
+  char* saveptr;
+  char* token = strtok_r(input, delims, &saveptr);
+  while (token != NULL) {
+    _p(F("token = ")); _pn(token);
     if (counter == 0) {
-      if (strcmp(parse_buffer, "get") == 0) {get = true;}
-      else if (strcmp(parse_buffer, "set") == 0) {set = true;}
-      else if (strcmp(parse_buffer, "test") == 0) {test = true;}
-      else if (strcmp(parse_buffer, "type") == 0) {type = true;}
-      else if (strcmp(parse_buffer, "run") == 0) {run = true;}
-      else if (strcmp(parse_buffer, "reset") == 0) {
+      if (strcmp(token, "get") == 0) {get = true;}
+      else if (strcmp(token, "set") == 0) {set = true;}
+      else if (strcmp(token, "test") == 0) {test = true;}
+      else if (strcmp(token, "type") == 0) {type = true;}
+      else if (strcmp(token, "run") == 0) {run = true;}
+      else if (strcmp(token, "reset") == 0) {
         for (int i = 0; i < NUM_PINS; i++) {
           for (int j = 0; j < PIN_ACTIONS_MAX; j++) {
             pin_actions[i][j].action_id = -1;
           }
         }
       }
-      else if (strcmp(parse_buffer, "save") == 0) {
+      else if (strcmp(token, "save") == 0) {
         if (sizeof(pin_actions) + sizeof(input_type) > EEPROM_SIZE) {
           _pn("Data does not fit into EEPROM, cannot save!");
           break;
@@ -173,26 +110,26 @@ void parse_input(char* input, const char delim) {  // input must be a proper 0-t
           EEPROM.put(EEPROM_SIZE - i - 1, input_type[i]);
         }
       }
-      else if (strcmp(parse_buffer, "load") == 0) {
+      else if (strcmp(token, "load") == 0) {
         EEPROM.get(0, pin_actions);
         for (int i = 0; i < sizeof(input_type); i++) {
           EEPROM.get(EEPROM_SIZE - i - 1, input_type[i]);
         }
       }
-      else if (strcmp(parse_buffer, "info") == 0) {debug_info(); break;}
+      else if (strcmp(token, "info") == 0) {debug_info(); break;}
       else {
         _pn(F("don't know whatcha talkin' 'bout!"));
         break;  // unknown primary action, exiting
       }
     } else if (run) {
-      _p(F("running: ")); _pn(parse_buffer);
-      if (parse_action(parse_buffer, INNER_DELIM, &parsed_action)) {
+      _p(F("running: ")); _pn(token);
+      if (parse_action(token, INNER_DELIM, &parsed_action)) {
         _pn(F("parsed action, executing"));
         parsed_action.execute(true);
         parsed_action.execute(false);
       }
     } else if (get || (set && counter == 1) || test || (type && counter == 1)) {
-      if (!str_to_int(parse_buffer, &input_num, 10) || input_num < 0 || input_num > NUM_INPUT_PINS - 1) {
+      if (!str_to_int(token, &input_num, 10) || input_num < 0 || input_num > NUM_INPUT_PINS - 1) {
         _pn(F("Are you trying to break me? This input pin number is bad."));
         break;
       }
@@ -218,13 +155,13 @@ void parse_input(char* input, const char delim) {  // input must be a proper 0-t
         _p(F("Too many actions, max allowed: ")); _p(PIN_ACTIONS_MAX); _pn(F(", ignoring rest..."));
         break;
       }
-      _p(F("setting config for input ")); _p(input_num); _p(F(": ")); _pn(parse_buffer);
-      if (parse_action(parse_buffer, INNER_DELIM, &parsed_action)) {
+      _p(F("setting config for input ")); _p(input_num); _p(F(": ")); _pn(token);
+      if (parse_action(token, INNER_DELIM, &parsed_action)) {
         _pn(F("parsed action, setting"));
         pin_actions[input_num][counter-2] = parsed_action;
       }
     } else if (type) {
-      if (!str_to_int(parse_buffer, &parsed_input_type, 10) || parsed_input_type < 0 || parsed_input_type > 2) {
+      if (!str_to_int(token, &parsed_input_type, 10) || parsed_input_type < 0 || parsed_input_type > 2) {
         _pn(F("Are you trying to break me? This input type is bad."));
         break;
       }
@@ -232,142 +169,14 @@ void parse_input(char* input, const char delim) {  // input must be a proper 0-t
       _p(F("Set input type to: ")); _pn(parsed_input_type);
     }
     counter++;
+    token = strtok_r(NULL, delims, &saveptr);
   }
-}
-
-bool parse_action(char* input, const char delim, input_action* action) {
-  _pn(F("parsing action"));
-  bool found = false;
-  parse_function parser = nullptr;
-  int buffer_pos = 0;
-  int len = strlen(input);
-  if (strtok_better(parse_buffer, READ_BUFFER_LEN, &buffer_pos, input, delim)) {
-    for (int i=0; i < NUM_ACTIONS; i++) {
-      if (strcmp(parse_buffer, function_map[i].action_name) == 0) {
-        action->action_id = i;
-        parser = function_map[i].parser;
-        _p(F("found action - ")); _pn(function_map[i].action_name);
-        if (parser != nullptr) {  // action has a parser, need to parse payload
-          if (buffer_pos < len) {  // there is some payload for this action
-            _pn(F("there is some payload for this action"));
-            if (parser(input+buffer_pos+1, delim, &(action->p))) {
-              _pn(F("was able to parse!"));
-              return true;
-            }
-          }
-        } else return true;  // action without parser = no payload parsing needed
-        break;
-      }
-    }
-  }
-  return false;
-}
-
-bool parser_keyboard(char* input, const char delim, payload* p) {
-  _pn(F("parsing kb action section"));
-  int counter = 0;
-  int buffer_pos = 0;
-  while (strtok_better(parse_buffer, READ_BUFFER_LEN, &buffer_pos, input, delim)) {
-    _p(F("found a piece: ")); _pn(parse_buffer);
-    int code;
-    if (str_to_int(parse_buffer, &code, 10) && code >= 0) {
-      _pn(F("decoded int"));
-      if (counter < ACTION_KB_CODES_MAX) {
-        p->keyboard.codes[counter] = code;
-        counter++;
-      } else {  // reached limit of codes array size, cannot store any more actions
-        _pn(F("Reached limit of codes per keyboard action:")); _p(ACTION_KB_CODES_MAX); _pn(F("; Add new action instead."));
-        p->keyboard.len = ACTION_KB_CODES_MAX;
-        return true;
-      }
-    } else {
-      _pn(F("wrong code for keyboard input, ignoring action payload"));
-      break;
-    }
-  }
-  p->keyboard.len = counter;
-  _p(F("p->keyboard.len = ")); _pn(p->keyboard.len);
-  _p(F("counter > 0")); _pn(counter > 0);
-  return counter > 0;
-}
-
-bool action_keyboard(payload p, bool state) {
-  _pn(F("KEYBOARD"));
-  for (int i=0; i < p.keyboard.len; i++) {
-    if (state) {Keyboard.press(p.keyboard.codes[i]);}
-    else Keyboard.release(p.keyboard.codes[i]);
-  }
-}
-
-bool parser_mouse(char* input, const char delim, payload* p) {
-  _pn(F("parsing mouse action section"));
-  int counter = 0;
-  int buffer_pos = 0;
-  while (strtok_better(parse_buffer, READ_BUFFER_LEN, &buffer_pos, input, delim)) {
-    _p(F("found a piece: ")); _pn(parse_buffer);
-    int code;
-    if (str_to_int(parse_buffer, &code, 10) && code >= -127 && code <= 127) {
-      _pn(F("decoded dec int"));
-      switch (counter) {
-        case 0: p->mouse.x = code; break;
-        case 1: p->mouse.y = code; break;
-        case 2: p->mouse.buttons.left = (code > 0) ? 1 : 0; return true;
-      }
-    } else {
-      _pn(F("wrong value for mouse input: ")); _p(parse_buffer); _pn(F("; ignoring action payload"));
-      break;
-    }
-    counter++;
-  }
-  return false;
-}
-
-bool action_mouse(payload p, bool state) {
-  _pn(F("MOUSE"));
-  if (!state) {return false;}
-  Mouse.move(p.mouse.x, p.mouse.y);
-  if (p.mouse.buttons.left > 0) {Mouse.click();}
-}
-
-bool parser_midi(char* input, const char delim, payload* p) {
-  _pn(F("parsing midi action section"));
-  int counter = 0;
-  int buffer_pos = 0;
-  while (strtok_better(parse_buffer, READ_BUFFER_LEN, &buffer_pos, input, delim)) {
-    _p(F("found a piece: ")); _pn(parse_buffer);
-    int code;
-    if (str_to_int(parse_buffer, &code, 16) && code >= 0 && code <= 127) {
-      _pn(F("decoded hex int"));
-      if (counter <= 2 && code > 15) {_pn(F("first 3 midi codes shoud be 'f' or less! Wrong data, ignoring payload.")); return false;}
-      switch (counter) {
-        case 0: p->midi.cin = code; break;
-        case 1: p->midi.type = code; break;
-        case 2: p->midi.channel = code; break;
-        case 3: p->midi.data1 = code; break;
-        case 4: p->midi.data2 = code; return true;  // already collected all values, ignoring rest of data
-      }
-    } else {
-      _pn(F("wrong code for midi input: ")); _p(parse_buffer); _pn(F("; ignoring action payload"));
-      break;
-    }
-    counter++;
-  }
-  return false;
-}
-
-bool action_midi(payload p, bool state) {
-  _pn(F("MIDI"));
-  uint8_t type = p.midi.type;
-  uint8_t cin = p.midi.cin;
-  uint8_t data2 = p.midi.data2;
-  if (p.midi.type == 0x9) type = cin = (state) ? 0x9 : 0x8;
-  if (p.midi.type == 0x8) type = cin = (state) ? 0x8 : 0x9;
-  if (p.midi.type == 0xb) data2 = (state) ? data2 : 0;
-  midiEventPacket_t event = {cin, type << 4 | p.midi.channel, p.midi.data1, data2};
-  MidiUSB.sendMIDI(event);
-  MidiUSB.flush();
 }
 
 void debug_info() {
    _p(F("size of pin config: ")); _pn(sizeof(pin_actions));
+   _p(F("size of keyboard payload: ")); _pn(sizeof(keyboard_payload));
+   _p(F("size of midi payload: ")); _pn(sizeof(midi_payload));
+   _p(F("size of mouse payload: ")); _pn(sizeof(mouse_payload));
+   _p(F("size of payload: ")); _pn(sizeof(payload));
 }

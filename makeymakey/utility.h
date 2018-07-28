@@ -101,19 +101,3 @@ bool str_to_int(const char* buff, int* out_int, int base) {
   }
   return false;
 }
-
-bool strtok_better(char buffer[], int buffer_len, int* buffer_pos, char* input, const char delim) {
-  int last_pos = *buffer_pos;
-  while (*(input + *buffer_pos) != 0) {
-    (*buffer_pos)++;
-    if (*(input + *buffer_pos ) == delim && *(input + *buffer_pos - 1) != delim) break;  // stopping on delimiter if it's not right after another delimiter
-    if (*buffer_pos - last_pos >= buffer_len) {return false;}  // string won't fit into buffer, returning false;
-  }
-  if (last_pos != *buffer_pos) {
-    memcpy(buffer, input + last_pos, *buffer_pos - last_pos);
-    buffer[*buffer_pos - last_pos] = 0;
-    if (*(input + *buffer_pos) != 0) (*buffer_pos)++;
-    return true;
-  }
-  return false;
-}

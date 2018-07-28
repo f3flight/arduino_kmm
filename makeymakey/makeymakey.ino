@@ -26,6 +26,10 @@ const uint8_t TYPE_M_TO_P = 2;
 bool input_state[NUM_INPUT_PINS] = {false};
 uint8_t input_type[NUM_INPUT_PINS] = {TYPE_MOMENTARY};
 bool input_state_m_to_p[NUM_INPUT_PINS] = {false};
+unsigned long input_long_press_timer[NUM_INPUT_PINS] = {0};
+bool input_long_press_fired[NUM_INPUT_PINS] = {0};
+
+const int LONG_PRESS_MS = 500; // 500ms will trigger long press event(s)
 
 const char* DELIM = " ";
 const char* INNER_DELIM = ",";
@@ -44,13 +48,20 @@ void setup() {
 
 void loop() {
     for (int pin = 0; pin < NUM_INPUT_PINS; pin++) {
-      bool state = (digitalRead(INPUT_PINS[pin]) == LOW);
+      int state = (digitalRead(INPUT_PINS[pin]) == LOW);
+      if (state == STATE_PRESSED && input_long_press_timer[pin] == 0) {
+        input_long_press_timer[pin] = millis();
+      }
+      if (state == STATE_RELEASED) {
+        input_long_press_timer[pin] = 0;
+        input_long_press_fired[pin] = 0;
+      }
       if (input_type[pin] == TYPE_M_TO_P) {
-        if (state && !input_state_m_to_p[pin]) {
+        if (state == STATE_PRESSED && !input_state_m_to_p[pin]) {
           input_state_m_to_p[pin] = true;
           state = !input_state[pin];
         } else {
-          if (!state) input_state_m_to_p[pin] = false;
+          if (state == STATE_RELEASED) input_state_m_to_p[pin] = false;
           state = input_state[pin];
         }
       }
@@ -60,6 +71,12 @@ void loop() {
         for (int i = 0; i < PIN_ACTIONS_MAX; i++) {
           if (pin_actions[pin][i].action_id == -1) break;
           pin_actions[pin][i].execute(state);
+        }
+      } else if (state == STATE_PRESSED && input_long_press_fired[pin] == 0 && millis() - input_long_press_timer[pin] >= LONG_PRESS_MS) { // time to fire log press events
+        input_long_press_fired[pin] = 1;
+        for (int i = 0; i < PIN_ACTIONS_MAX; i++) {
+          if (pin_actions[pin][i].action_id == -1) break;
+          pin_actions[pin][i].execute(STATE_LONG_PRESSED);
         }
       }
     }

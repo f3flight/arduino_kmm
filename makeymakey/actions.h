@@ -1,3 +1,5 @@
+#include "states.h"
+
 const char NUM_ACTIONS = 3;
 
 const int ACTION_NAME_LEN_MAX = 6;
@@ -37,7 +39,14 @@ union payload {
 };
 
 typedef bool(*parse_function)(char*, const char, payload*);
-typedef bool(*action_function)(payload, bool, char);
+typedef bool(*action_function)(payload, int, char);
+
+bool parser_keyboard(char* input, const char* delims, payload* p);
+bool parser_mouse(char* input, const char* delims, payload* p);
+bool parser_midi(char* input, const char* delims, payload* p);
+bool action_keyboard(payload input, int state, char event);
+bool action_mouse(payload input, int state, char event);
+bool action_midi(payload input, int state, char event);
 
 struct function_link {
   char action_name[ACTION_NAME_LEN_MAX];
@@ -45,25 +54,19 @@ struct function_link {
   parse_function parser;
 };
 
-bool parser_keyboard(char* input, const char* delims, payload* p);
-bool parser_mouse(char* input, const char* delims, payload* p);
-bool parser_midi(char* input, const char* delims, payload* p);
-bool action_keyboard(payload input, bool state, char event);
-bool action_mouse(payload input, bool state, char event);
-bool action_midi(payload input, bool state, char event);
-
 const function_link function_map[NUM_ACTIONS] = {
   {"kb", &action_keyboard, &parser_keyboard},
   {"mouse", &action_mouse, &parser_mouse},
   {"midi", &action_midi, &parser_midi},
 };
 
-const int NUM_EVENTS = 4;
+const int NUM_EVENTS = 5;
 const char EVENT_PRESS_AUTO_RELEASE = 'a';
 const char EVENT_PRESS = 'p';
 const char EVENT_RELEASE = 'r';
 const char EVENT_LONG_PRESS = 'l';
-const char EVENTS[NUM_EVENTS] = {EVENT_PRESS_AUTO_RELEASE, EVENT_PRESS, EVENT_RELEASE, EVENT_LONG_PRESS};
+const char EVENT_LONG_PRESS_AUTO_RELEASE = 'b';
+const char EVENTS[NUM_EVENTS] = {EVENT_PRESS_AUTO_RELEASE, EVENT_PRESS, EVENT_RELEASE, EVENT_LONG_PRESS, EVENT_LONG_PRESS_AUTO_RELEASE};
 /* 
  *  EVENT_PRESS_AUTO_RELEASE is default and can be omitted. This allows setting press event action, and release event will be called with opposite action.
  *  i.e. if press is midi note on -> release will be midi note off
@@ -80,7 +83,13 @@ struct input_action {
   int action_id = -1;
   char event = EVENT_PRESS_AUTO_RELEASE;
   payload p;
-  bool execute(bool state) {
+  bool execute(int state) {
+    if (action_id < 0) {return false;} // action not defined, incorrect invocation
+    _p(F("consider executing: action = ")); _p(function_map[action_id].action_name); _p(F(", state = ")); _p(state); _p(F(", event = ")); _pn(event);
+    if (state == STATE_PRESSED && event != EVENT_PRESS && event != EVENT_PRESS_AUTO_RELEASE) {return false;} // skipping press state for non EVENT_PRESS* events 
+    if (state == STATE_LONG_PRESSED && event != EVENT_LONG_PRESS && event != EVENT_LONG_PRESS_AUTO_RELEASE) {return false;} // skipping long-press state for non EVENT_LONG_PRESS* events 
+    if (state == STATE_RELEASED && (event == EVENT_PRESS || event == EVENT_LONG_PRESS)) {return false;} // skipping release state for press-only (non-autorelease) events
+    _pn(F("checks passed, executing..."));
     return function_map[action_id].action(p, state, event);
   }
 };
@@ -93,7 +102,7 @@ bool parse_action(char* input, const char* delims, input_action* action) {
   bool found = false;
   parse_function parser = nullptr;
   int len = strlen(input);
-  char event;
+  char event = EVENT_PRESS_AUTO_RELEASE; // default to "autorelease" mode where we fire release events based on press event's payload (or just fire the same event)
   char input_copy[MAX_ACTION_STRING_LENGTH] = {0}; // need to copy input because this is a nested call to strtok, with a different delim
   if (strlen(input) > MAX_ACTION_STRING_LENGTH) {
     _p(F("Action string |")); _p(input); _p(F("| is too long, ignoring, sorry! Max length = ")); _pn(MAX_ACTION_STRING_LENGTH);
@@ -172,10 +181,11 @@ bool parser_keyboard(char* input, const char* delims, payload* p) {
   return counter > 0;
 }
 
-bool action_keyboard(payload p, bool state, char event) {
-  _p(F("KEYBOARD, state = ")); _p(state); _p(F(", event = ")); _pn(event);
+bool action_keyboard(payload p, int state, char event) {
+  // does not support "release" events for now, will do nothing (will release button without pressing)
+  _pn(F("KEYBOARD"));
   for (int i=0; i < p.keyboard.len; i++) {
-    if (state) {Keyboard.press(p.keyboard.codes[i]);}
+    if (state == STATE_PRESSED || state == STATE_LONG_PRESSED) {Keyboard.press(p.keyboard.codes[i]);}
     else Keyboard.release(p.keyboard.codes[i]);
   }
 }
@@ -205,9 +215,10 @@ bool parser_mouse(char* input, const char* delims, payload* p) {
   return false;
 }
 
-bool action_mouse(payload p, bool state, char event) {
-  _p(F("MOUSE, state = ")); _p(state); _p(F(", event = ")); _pn(event);
-  if (!state) {return false;}
+bool action_mouse(payload p, int state, char event) {
+  // does not support "release" events for now, will do nothing
+  _pn(F("MOUSE"));
+  if (state == STATE_RELEASED) {return false;}
   Mouse.move(p.mouse.x, p.mouse.y);
   if (p.mouse.buttons.left > 0) {Mouse.click();}
 }
@@ -240,14 +251,15 @@ bool parser_midi(char* input, const char* delims, payload* p) {
   return false;
 }
 
-bool action_midi(payload p, bool state, char event) {
-  _p(F("MIDI, state = ")); _p(state); _p(F(", event = ")); _pn(event);
+bool action_midi(payload p, int state, char event) {
+  // does not support "release" events for now, will work as if it was a release of a "press" event
+  _pn(F("MIDI"));
   uint8_t type = p.midi.type;
   uint8_t cin = p.midi.cin;
   uint8_t data2 = p.midi.data2;
-  if (p.midi.type == 0x9) type = cin = (state) ? 0x9 : 0x8;
-  if (p.midi.type == 0x8) type = cin = (state) ? 0x8 : 0x9;
-  if (p.midi.type == 0xb) data2 = (state) ? data2 : 0;
+  if (p.midi.type == 0x9) type = cin = (state == STATE_PRESSED || state == STATE_LONG_PRESSED) ? 0x9 : 0x8;
+  if (p.midi.type == 0x8) type = cin = (state == STATE_PRESSED || state == STATE_LONG_PRESSED) ? 0x8 : 0x9;
+  if (p.midi.type == 0xb) data2 = (state == STATE_PRESSED || state == STATE_LONG_PRESSED) ? data2 : 0;
   midiEventPacket_t midi_event = {cin, type << 4 | p.midi.channel, p.midi.data1, data2};
   MidiUSB.sendMIDI(midi_event);
   MidiUSB.flush();

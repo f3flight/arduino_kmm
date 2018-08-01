@@ -6,7 +6,7 @@
 
 const int EEPROM_SIZE = 1024;
 
-#include <Mouse.h>
+#include "MouseAbs.h"
 
 // MIDIUSB - Version: Latest 
 #include <MIDIUSB.h>
@@ -23,6 +23,7 @@ bool input_state[NUM_INPUT_PINS] = {false};
 bool input_state_m_to_p[NUM_INPUT_PINS] = {false};
 unsigned long input_long_press_timer[NUM_INPUT_PINS] = {0};
 bool input_long_press_fired[NUM_INPUT_PINS] = {0};
+bool input_has_long_press_events[NUM_INPUT_PINS]  = {0};
 
 const int LONG_PRESS_MS = 500; // 500ms will trigger long press event(s)
 
@@ -66,30 +67,23 @@ void loop() {
       if (input_state[pin] != state) {
         _p(F("input ")); _p(pin); _p(F(" new state ")); _pn(state);
         input_state[pin] = state;
-        bool has_long_press_events = false;
-        for (int i = 0; i < PIN_ACTIONS_MAX; i++) {
-          if (pin_actions[pin][i].event == EVENT_LONG_PRESS || pin_actions[pin][i].event == EVENT_LONG_PRESS_AUTO_RELEASE) {
-            has_long_press_events = true;
-            break;
-          }
-        }
         for (int i = 0; i < PIN_ACTIONS_MAX; i++) {
           if (pin_actions[pin][i].action_id == -1) break;
           if (input_type[pin] == TYPE_M_ALLOW_BOTH_PRESSES) {
             pin_actions[pin][i].execute(state);
           } else {
-            if (state == STATE_PRESSED && has_long_press_events) continue; // do not fire press event if three's a chance that long press will happen
+            if (state == STATE_PRESSED && input_has_long_press_events[pin]) continue; // do not fire press event if three's a chance that long press will happen
             if (state == STATE_RELEASED) {
               if (pin_actions[pin][i].event == EVENT_PRESS_AUTO_RELEASE && input_long_press_fired[pin] == 1) continue; // do not fire auto-release of press if long press happened instead
               if (pin_actions[pin][i].event == EVENT_LONG_PRESS_AUTO_RELEASE && input_long_press_fired[pin] == 0) continue; // do not fire auto-release of long-press which didn't happen
-              if (has_long_press_events && input_long_press_fired[pin] == 0) { // fire normal press if long press did not happen and we released the button
+              if (input_has_long_press_events[pin] && input_long_press_fired[pin] == 0) { // fire normal press if long press did not happen and we released the button
                 pin_actions[pin][i].execute(STATE_PRESSED);
               }
             }
             pin_actions[pin][i].execute(state);
           }
         }
-      } else if (state == STATE_PRESSED && input_long_press_fired[pin] == 0 && millis() - input_long_press_timer[pin] >= LONG_PRESS_MS) { // time to fire log press events
+      } else if (state == STATE_PRESSED && input_has_long_press_events[pin] && input_long_press_fired[pin] == 0 && millis() - input_long_press_timer[pin] >= LONG_PRESS_MS) { // time to fire log press events
         input_long_press_fired[pin] = 1;
         for (int i = 0; i < PIN_ACTIONS_MAX; i++) {
           if (pin_actions[pin][i].action_id == -1) break;
@@ -114,13 +108,10 @@ void loop() {
 
 void parse_input(char* input, const char* delims) {  // input must be a proper 0-terminated string
   int buffer_pos = 0;
-  bool get = false, set = false, test = false, type = false, run = false;
+  bool get = false, set = false, test = false, type = false, run = false, save = false, load = false;
   int counter = 0;
   int input_num = 0;
   int parsed_input_type = 0;
-  //char* input_copy[READ_BUFFER_LEN] = {0};
-  //strcpy(input_copy, input);
-  //char* token = strtok(input_copy, delims);
   char* saveptr;
   char* token = strtok_r(input, delims, &saveptr);
   while (token != NULL) {
@@ -139,6 +130,7 @@ void parse_input(char* input, const char* delims) {  // input must be a proper 0
         }
       }
       else if (strcmp(token, "save") == 0) {
+        save = true;
         if (sizeof(pin_actions) + sizeof(input_type) > EEPROM_SIZE) {
           _pn("Data does not fit into EEPROM, cannot save!");
           break;
@@ -149,6 +141,7 @@ void parse_input(char* input, const char* delims) {  // input must be a proper 0
         }
       }
       else if (strcmp(token, "load") == 0) {
+        load = true;
         EEPROM.get(0, pin_actions);
         for (int i = 0; i < sizeof(input_type); i++) {
           EEPROM.get(EEPROM_SIZE - i - 1, input_type[i]);
@@ -208,6 +201,19 @@ void parse_input(char* input, const char* delims) {  // input must be a proper 0
     }
     counter++;
     token = strtok_r(NULL, delims, &saveptr);
+  }
+  if (set || load) {
+    update_input_has_long_press_events(input_num);
+  }
+}
+
+void update_input_has_long_press_events(int input_num) {
+  input_has_long_press_events[input_num] = false;
+  for (int i = 0; i < PIN_ACTIONS_MAX; i++) {
+    if (pin_actions[input_num][i].action_id == -1) break;
+    if (pin_actions[input_num][i].event == EVENT_LONG_PRESS || pin_actions[input_num][i].event == EVENT_LONG_PRESS_AUTO_RELEASE) {
+      input_has_long_press_events[input_num] = true;
+    }
   }
 }
 

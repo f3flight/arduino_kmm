@@ -27,9 +27,10 @@ struct mouse_buttons {
 };
 
 struct mouse_payload {
-  uint8_t x;
-  uint8_t y;
+  uint16_t x;
+  uint16_t y;
   mouse_buttons buttons;
+  int8_t wheel;
 };
 
 union payload {
@@ -195,31 +196,50 @@ bool parser_mouse(char* input, const char* delims, payload* p) {
   int counter = 0;
   char* saveptr;
   char* token = strtok_r(input, delims, &saveptr);
+  p->mouse.wheel = 0;
+  p->mouse.buttons.left = 0;
+  p->mouse.buttons.right = 0;
+  bool bad_input = false;
   while (token != NULL) {
     _p(F("found a piece: ")); _pn(token);
     int code;
-    if (str_to_int(token, &code, 10) && code >= -127 && code <= 127) {
+    if (str_to_int(token, &code, 10)) {
       _pn(F("decoded dec int"));
       switch (counter) {
-        case 0: p->mouse.x = code; break;
-        case 1: p->mouse.y = code; break;
-        case 2: p->mouse.buttons.left = (code > 0) ? 1 : 0; return true;
+        case 0: if (code >= -1 && code <= 1023) {p->mouse.x = code;}
+                else {bad_input = true;}
+                break;
+        case 1: if (code >= -1 && code <= 1023) {p->mouse.y = code;}
+                else {bad_input = true;}
+                break;
+        case 2: if (code >= -127 && code <= 127) {p->mouse.wheel = code;}
+                else {bad_input = true;}
+                break;
+        case 3: p->mouse.buttons.left = (code > 0) ? 1 : 0; break;
+        case 4: p->mouse.buttons.right = (code > 0) ? 1 : 0; return true;
       }
     } else {
-      _pn(F("wrong value for mouse input: ")); _p(token); _pn(F("; ignoring action payload"));
-      break;
+      bad_input = true;
+    }
+    if (bad_input) {
+      _p(F("wrong value for mouse input at position ")); _p(counter); _p(F(": ")); _p(token); _pn(F("; ignoring action payload"));
+      return false;
     }
     counter++;
     token = strtok_r(NULL, delims, &saveptr);
   }
-  return false;
+  if (counter >= 2) {
+    return true;
+  } else {
+    return false;
+  }
 }
 
 bool action_mouse(payload p, int state, char event) {
   // does not support "release" events for now, will do nothing
   _pn(F("MOUSE"));
   if (state == STATE_RELEASED) {return false;}
-  Mouse.move(p.mouse.x, p.mouse.y);
+  Mouse.move(p.mouse.x, p.mouse.y, p.mouse.wheel);
   if (p.mouse.buttons.left > 0) {Mouse.click();}
 }
 

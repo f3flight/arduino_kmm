@@ -1,5 +1,3 @@
-#include "states.h"
-
 const char NUM_ACTIONS = 3;
 
 const int ACTION_NAME_LEN_MAX = 6;
@@ -84,12 +82,13 @@ struct input_action {
   int action_id = -1;
   char event = EVENT_PRESS_AUTO_RELEASE;
   payload p;
-  bool execute(int state) {
+  bool execute(bool state, bool long_event) {
     if (action_id < 0) {return false;} // action not defined, incorrect invocation
-    _p(F("consider executing: action = ")); _p(function_map[action_id].action_name); _p(F(", state = ")); _p(state); _p(F(", event = ")); _pn(event);
-    if (state == STATE_PRESSED && event != EVENT_PRESS && event != EVENT_PRESS_AUTO_RELEASE) {return false;} // skipping press state for non EVENT_PRESS* events 
-    if (state == STATE_LONG_PRESSED && event != EVENT_LONG_PRESS && event != EVENT_LONG_PRESS_AUTO_RELEASE) {return false;} // skipping long-press state for non EVENT_LONG_PRESS* events 
-    if (state == STATE_RELEASED && (event == EVENT_PRESS || event == EVENT_LONG_PRESS)) {return false;} // skipping release state for press-only (non-autorelease) events
+    _p(F("consider executing: action = ")); _p(function_map[action_id].action_name); _p(F(", event = ")); _p(event); _p(F(", state = ")); _p(state); _p(F(", long_event = ")); _pn(long_event);
+    if (long_event && event != EVENT_LONG_PRESS && event != EVENT_LONG_PRESS_AUTO_RELEASE) {return false;} // got long press/release event, skipping non-long-press events
+    if (!long_event && (event == EVENT_LONG_PRESS || event == EVENT_LONG_PRESS_AUTO_RELEASE)) {return false;} // and vice versa
+    if (state && (event == EVENT_RELEASE)) {return false;} // ignoring press for release events
+    if (!state && (event == EVENT_PRESS || event == EVENT_LONG_PRESS)) {return false;} // and vice versa
     _pn(F("checks passed, executing..."));
     return function_map[action_id].action(p, state, event);
   }
@@ -158,6 +157,7 @@ bool parser_keyboard(char* input, const char* delims, payload* p) {
   char* saveptr;
   char* token = strtok_r(input, delims, &saveptr);
   while (token != NULL) {
+    _p(F("delims: ")); _pn(delims);
     _p(F("found a piece: ")); _pn(token);
     int code;
     if (str_to_int(token, &code, 10) && code >= 0) {
@@ -186,7 +186,7 @@ bool action_keyboard(payload p, int state, char event) {
   // does not support "release" events for now, will do nothing (will release button without pressing)
   _pn(F("KEYBOARD"));
   for (int i=0; i < p.keyboard.len; i++) {
-    if (state == STATE_PRESSED || state == STATE_LONG_PRESSED) {Keyboard.press(p.keyboard.codes[i]);}
+    if (state) {Keyboard.press(p.keyboard.codes[i]);}
     else Keyboard.release(p.keyboard.codes[i]);
   }
 }
@@ -238,7 +238,7 @@ bool parser_mouse(char* input, const char* delims, payload* p) {
 bool action_mouse(payload p, int state, char event) {
   // does not support "release" events for now, will do nothing
   _pn(F("MOUSE"));
-  if (state == STATE_RELEASED) {return false;}
+  if (!state) {return false;}
   Mouse.move(p.mouse.x, p.mouse.y, p.mouse.wheel);
   if (p.mouse.buttons.left > 0) {Mouse.click();}
 }
@@ -277,9 +277,11 @@ bool action_midi(payload p, int state, char event) {
   uint8_t type = p.midi.type;
   uint8_t cin = p.midi.cin;
   uint8_t data2 = p.midi.data2;
-  if (p.midi.type == 0x9) type = cin = (state == STATE_PRESSED || state == STATE_LONG_PRESSED) ? 0x9 : 0x8;
-  if (p.midi.type == 0x8) type = cin = (state == STATE_PRESSED || state == STATE_LONG_PRESSED) ? 0x8 : 0x9;
-  if (p.midi.type == 0xb) data2 = (state == STATE_PRESSED || state == STATE_LONG_PRESSED) ? data2 : 0;
+  if (event == EVENT_PRESS_AUTO_RELEASE || event == EVENT_LONG_PRESS_AUTO_RELEASE) {
+    if (p.midi.type == 0x9) type = cin = (state) ? 0x9 : 0x8;
+    if (p.midi.type == 0x8) type = cin = (state) ? 0x8 : 0x9;
+    if (p.midi.type == 0xb) data2 = (state) ? data2 : 0;
+  }
   midiEventPacket_t midi_event = {cin, type << 4 | p.midi.channel, p.midi.data1, data2};
   MidiUSB.sendMIDI(midi_event);
   MidiUSB.flush();

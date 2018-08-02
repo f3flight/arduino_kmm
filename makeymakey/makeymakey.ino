@@ -65,7 +65,11 @@ void debug_info() {
      _pn("");
      for (int j = 0; j < PIN_ACTIONS_MAX; j++) {
        if (pin_actions[i][j].action_id == -1) break;
-       _p(F("  action = ")); _p(function_map[pin_actions[i][j].action_id].action_name); _p(F(", event = ")); _pn(pin_actions[i][j].event);
+       _p(F("  action = ")); _p(function_map[pin_actions[i][j].action_id].action_name); _p(F(", event = ")); _p(pin_actions[i][j].event);
+       for (int k = 0; k < sizeof(payload); k++) {
+         _p(" "); _p(pin_actions[i][j].p.bytes[k]);
+       }
+       _pn("");
      }
    }
 }
@@ -176,8 +180,12 @@ void parse_input(char* input, const char* delims) {  // input must be a proper 0
     counter++;
     token = strtok_r(NULL, delims, &saveptr);
   }
-  if (set || load) {
+  if (set) {
     update_input_has_long_press_events(input_num);
+  } else if (load) {
+    for (int pin = 0; pin < NUM_INPUT_PINS; pin++) {
+      update_input_has_long_press_events(pin);
+    }
   }
 }
 

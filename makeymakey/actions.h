@@ -35,6 +35,7 @@ union payload {
   keyboard_payload keyboard;
   midi_payload midi;
   mouse_payload mouse;
+  uint8_t bytes[6];
 };
 
 typedef bool(*parse_function)(char*, const char, payload*);

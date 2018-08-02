@@ -30,7 +30,7 @@ bool input_has_long_press_events[NUM_INPUT_PINS]  = {0};
 const int LONG_PRESS_MS = 500; // 500ms will trigger long press event(s)
 
 const uint8_t FLAG_M_TO_P = 1; // convert momentary button into persistent button
-const uint8_t FLAG_DONT_WAIT = 2; // this flag allows events of type "EVENT_PRESS*" fire even if there is an event of type "EVENT_LONG_PRESS*" and LONG_PRESS_MS time has not passed;
+const uint8_t FLAG_DONT_WAIT = 2; // this flag allows events of type "EVENT_PRESS*" to fire even if there is an event of type "EVENT_LONG_PRESS*" and LONG_PRESS_MS time has not passed;
 
 uint8_t input_flags[NUM_INPUT_PINS] = {0};
 
